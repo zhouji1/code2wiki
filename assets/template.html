@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__WIKI_TITLE__</title>
+  <!-- __HEAD_EXTRA__ -->
+  <style>__STYLE__</style>
+</head>
+<body>
+  <button id="menu-toggle" aria-label="Toggle navigation">☰</button>
+  <nav id="sidebar">
+    <div class="sidebar-header">
+      <h1 id="wiki-title">__WIKI_TITLE__</h1>
+      <input id="search" type="search" placeholder="Search pages…" autocomplete="off" />
+    </div>
+    <div id="nav-tree"></div>
+    <div class="sidebar-footer" id="sidebar-footer"></div>
+  </nav>
+  <main id="content">
+    <article id="page" class="markdown-body">Loading…</article>
+  </main>
+
+  <!-- rendering libraries (inlined by build_site.py, or CDN with --cdn / in serve mode) -->
+  __VENDOR_SCRIPTS__
+
+  <!-- wiki data: defined for the static build; absent in serve mode (fetched instead) -->
+  __WIKI_DATA__
+
+  <script>__APP_JS__</script>
+</body>
+</html>
