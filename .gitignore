@@ -1,0 +1,22 @@
+# Downloaded rendering libraries (cached by build_site.py / serve.py)
+assets/vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+*.swp
+.idea/
+.vscode/
+
+# Claude
+.claude/
