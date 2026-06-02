@@ -11,6 +11,12 @@ It runs a four-phase pipeline: **analyze → plan structure → generate pages �
 - **Live preview** — a local server renders pages straight from disk and auto-reloads the browser as pages are written, so you watch the wiki fill in.
 - **Updatable** — revise a page, restructure sections, or refresh after code changes. Per-page provenance front-matter powers staleness detection; `locked: true` shields hand-edited pages from regeneration.
 
+## Screenshots
+
+![Generated wiki landing page](https://github.com/user-attachments/assets/78da5049-fcfa-4f16-9ff4-8291b5166f78)
+
+*A wiki generated for [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) — sidebar navigation, client-side Markdown, and inline Mermaid diagrams. Builds to a single self-contained `wiki.html`.*
+
 ## Layout
 
 ```
