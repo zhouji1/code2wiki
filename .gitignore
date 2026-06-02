@@ -1,6 +1,9 @@
 # Downloaded rendering libraries (cached by build_site.py / serve.py)
 assets/vendor/
 
+# Generated wiki output
+.code2wiki/
+
 # Python
 __pycache__/
 *.py[cod]
