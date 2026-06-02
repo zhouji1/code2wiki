@@ -234,6 +234,7 @@
   function setFooter() {
     var parts = [];
     if (manifest.generated_at) parts.push("Generated " + manifest.generated_at);
+    if (manifest.generated_with) parts.push("with " + manifest.generated_with);
     if (!EMBEDDED) parts.push("live preview");
     footerEl.textContent = parts.join(" · ");
     var titleEls = document.querySelectorAll("#wiki-title, title");

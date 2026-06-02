@@ -64,6 +64,7 @@ Schema:
   "title": "<repo-name> Wiki",
   "repo": "<absolute repo path>",
   "generated_at": "<today's date>",
+  "generated_with": "<LLM provider and model, e.g. 'Anthropic Claude Opus 4.8'>",
   "sections": [
     {
       "id": "overview",
@@ -82,7 +83,7 @@ Schema:
 }
 ```
 
-`hints` and `source_files` are the brief you hand to the page writer — make them specific (name real files from `analysis.json`). `id`s must be filesystem-safe (lowercase, hyphens).
+`hints` and `source_files` are the brief you hand to the page writer — make them specific (name real files from `analysis.json`). `id`s must be filesystem-safe (lowercase, hyphens). Set `generated_with` to the provider and model you (the generating LLM) are running as, e.g. `"Anthropic Claude Opus 4.8"`.
 
 Briefly print the proposed structure (just the section/page titles) so the user can see what's coming, then **continue straight into Phase 3 — do not stop to ask for confirmation**. The user can always interrupt to adjust, and revising the manifest later is cheap. Only pause here if the user explicitly asked to review the structure first.
 
