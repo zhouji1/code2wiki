@@ -51,6 +51,8 @@ python3 <skill-dir>/scripts/analyze_repo.py <repo-path> --out <repo>/.code2wiki/
 
 This emits `analysis.json` with: pruned directory tree, language/LOC breakdown, detected build tools & dependencies (package.json, requirements.txt, go.mod, pom.xml, Cargo.toml, …), candidate entry points, config files, and git signal (most-changed files, recent activity, contributors).
 
+**Ignored files are excluded.** If the repo has a `.gitignore`, any path it matches is skipped — both in the directory tree and the language/LOC/dependency stats — so generated output, vendored code, and secrets don't pollute the analysis or leak into the wiki. Nested `.gitignore` files are honored and scoped to their own directory, and `!` re-includes work. `analysis.json` reports `gitignore_respected: true` when patterns were applied. Pass `--no-gitignore` to analyze every file regardless. This is on by default — no extra step needed.
+
 Then **read the key files yourself** to form an architectural mental model — at minimum the README, the top entry points, and the main config/build files that `analysis.json` surfaced. Don't read the whole repo; you're orienting, not documenting. The goal is to know enough to plan a good structure and to write precise `hints` for each page.
 
 ## Phase 2 — Plan the wiki structure

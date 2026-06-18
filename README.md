@@ -55,7 +55,7 @@ requests like *"create a wiki for this repo"*, *"document the architecture"*, or
 
 ## How it works
 
-1. **Analyze** — `analyze_repo.py` emits `analysis.json` (pruned directory tree, language/LOC breakdown, build tools & dependencies, candidate entry points, config files, git hotspots). This gives the planner a cheap, deterministic starting point.
+1. **Analyze** — `analyze_repo.py` emits `analysis.json` (pruned directory tree, language/LOC breakdown, build tools & dependencies, candidate entry points, config files, git hotspots). This gives the planner a cheap, deterministic starting point. Paths matched by the repo's `.gitignore` are excluded by default, so generated output and vendored code stay out of the wiki; pass `--no-gitignore` to scan everything.
 2. **Plan structure** — the agent writes `wiki.json`: sections and pages adapted to what the repo actually contains (a CLI library gets no "Frontend" section; a multi-service repo may get one section per service). The proposed structure is shown to you before generation.
 3. **Generate pages** — one page at a time (fanned out across subagents where supported). Each is written from the real code, cites file paths, adds Mermaid diagrams where useful, and lands as its own `.md` file.
 4. **Build & preview** — `serve.py` gives a live, auto-reloading preview during generation; `build_site.py` produces the final portable `wiki.html`.
