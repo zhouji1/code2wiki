@@ -7,16 +7,20 @@ points, config files, and git signal (most-changed files, recent commits,
 contributors). This gives the wiki planner a cheap, deterministic starting
 point so subagents don't have to rediscover the basics.
 
+Paths matched by a .gitignore are excluded by default, so generated output and
+vendored code don't pollute the analysis. Use --no-gitignore to scan everything.
+
 Usage:
-  python3 analyze_repo.py <repo-path> [--out analysis.json] [--max-tree-entries 400]
+  python3 analyze_repo.py <repo-path> [--out analysis.json] [--max-tree-entries 400] [--no-gitignore]
 """
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 # Directories we never want to descend into.
@@ -89,6 +93,145 @@ ENTRY_HINTS = (
 
 TEXT_READ_LIMIT = 2_000_000  # don't try to count lines on files bigger than this
 
+# Ignore file we honor: standard .gitignore.
+IGNORE_FILENAME = ".gitignore"
+
+
+def _glob_to_regex(body: str) -> str:
+    """Translate the glob portion of a gitignore pattern into a regex fragment.
+
+    Handles `*` (no `/` crossing), `**` (crosses `/`), `?`, and `[...]` classes.
+    `/` is treated as a literal path separator.
+    """
+    i, n = 0, len(body)
+    out = []
+    while i < n:
+        c = body[i]
+        if c == "*":
+            j = i
+            while j < n and body[j] == "*":
+                j += 1
+            if j - i >= 2:  # `**`
+                if j < n and body[j] == "/":
+                    out.append("(?:.*/)?")  # `**/` matches zero or more dirs
+                    i = j + 1
+                else:
+                    out.append(".*")
+                    i = j
+            else:  # single `*` — anything but a path separator
+                out.append("[^/]*")
+                i = j
+        elif c == "?":
+            out.append("[^/]")
+            i += 1
+        elif c == "[":
+            j = i + 1
+            if j < n and body[j] in ("!", "^"):
+                j += 1
+            if j < n and body[j] == "]":
+                j += 1
+            while j < n and body[j] != "]":
+                j += 1
+            if j >= n:  # unterminated class — treat `[` as literal
+                out.append(r"\[")
+                i += 1
+            else:
+                cls = body[i + 1:j]
+                cls = ("^" + cls[1:]) if cls.startswith("!") else cls
+                out.append("[" + cls + "]")
+                i = j + 1
+        else:
+            out.append(re.escape(c))
+            i += 1
+    return "".join(out)
+
+
+class _Rule:
+    __slots__ = ("regex", "negated", "dir_only")
+
+    def __init__(self, regex, negated, dir_only):
+        self.regex = regex
+        self.negated = negated
+        self.dir_only = dir_only
+
+
+class IgnoreMatcher:
+    """Applies .gitignore-style patterns, with the usual semantics:
+
+    leading `/` and embedded `/` anchor to the ignore file's directory,
+    a trailing `/` matches directories only, `!` re-includes, `*`/`**`/`?`/`[..]`
+    globbing, and last-match-wins. Patterns from nested ignore files are scoped to
+    their own directory. Good enough for excluding files from analysis without a
+    git dependency; not a byte-for-byte reimplementation of git's pathspec engine.
+    """
+
+    def __init__(self, rules):
+        self._rules = rules
+
+    @property
+    def active(self) -> bool:
+        return bool(self._rules)
+
+    @classmethod
+    def from_repo(cls, repo: Path) -> "IgnoreMatcher":
+        rules = []
+        # Collect ignore files, shallowest first, so deeper (more specific) files
+        # take precedence under last-match-wins.
+        ignore_files = []
+        for root, dirs, files in os.walk(repo):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".git")]
+            rel_dir = Path(root).relative_to(repo)
+            if IGNORE_FILENAME in files:
+                base = "" if rel_dir == Path(".") else rel_dir.as_posix()
+                ignore_files.append((len(rel_dir.parts), base, Path(root) / IGNORE_FILENAME))
+        for _, base, path in sorted(ignore_files, key=lambda t: t[0]):
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for raw in lines:
+                rule = cls._compile_pattern(raw, base)
+                if rule is not None:
+                    rules.append(rule)
+        return cls(rules)
+
+    @staticmethod
+    def _compile_pattern(raw: str, base: str):
+        line = raw.rstrip("\n").rstrip()
+        if not line or line.startswith("#"):
+            return None
+        negated = False
+        if line.startswith("!"):
+            negated = True
+            line = line[1:]
+        elif line.startswith("\\#") or line.startswith("\\!"):
+            line = line[1:]  # unescape a literal leading # or !
+        dir_only = line.endswith("/")
+        if dir_only:
+            line = line[:-1]
+        if not line:
+            return None
+        # A pattern is anchored to `base` if it starts with `/` or contains a `/`
+        # anywhere other than a trailing one; otherwise it matches at any depth.
+        if line.startswith("/"):
+            anchored = True
+            line = line[1:]
+        else:
+            anchored = "/" in line
+        prefix = (re.escape(base) + "/") if base else ""
+        depth = "" if anchored else "(?:.*/)?"
+        regex = re.compile("^" + prefix + depth + _glob_to_regex(line) + "$")
+        return _Rule(regex, negated, dir_only)
+
+    def is_ignored(self, rel_posix: str, is_dir: bool) -> bool:
+        ignored = False
+        for rule in self._rules:
+            if rule.dir_only and not is_dir:
+                continue
+            if rule.regex.match(rel_posix):
+                ignored = not rule.negated
+        return ignored
+
 
 def is_probably_binary(path: Path) -> bool:
     try:
@@ -109,17 +252,28 @@ def count_lines(path: Path) -> int:
         return 0
 
 
-def walk_repo(repo: Path):
-    """Yield (path, rel_path) for files, skipping noise directories."""
+def walk_repo(repo: Path, ignore: IgnoreMatcher = None):
+    """Yield (path, rel_path) for files, skipping noise and .gitignore'd paths."""
     for root, dirs, files in os.walk(repo):
+        rel_root = Path(root).relative_to(repo)
         # prune in-place so os.walk doesn't descend
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".git")]
+        kept = []
+        for d in dirs:
+            if d in SKIP_DIRS or d.startswith(".git"):
+                continue
+            if ignore and ignore.is_ignored((rel_root / d).as_posix(), is_dir=True):
+                continue
+            kept.append(d)
+        dirs[:] = kept
         for name in files:
             p = Path(root) / name
-            yield p, p.relative_to(repo)
+            rel = p.relative_to(repo)
+            if ignore and ignore.is_ignored(rel.as_posix(), is_dir=False):
+                continue
+            yield p, rel
 
 
-def build_tree(repo: Path, max_entries: int) -> dict:
+def build_tree(repo: Path, max_entries: int, ignore: IgnoreMatcher = None) -> dict:
     """A pruned, depth-limited directory tree for orientation."""
     root = {"name": repo.name, "type": "dir", "children": []}
     nodes = {Path("."): root}
@@ -128,8 +282,12 @@ def build_tree(repo: Path, max_entries: int) -> dict:
 
     entries = []
     for root_dir, dirs, files in os.walk(repo):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith(".git"))
         rel_dir = Path(root_dir).relative_to(repo)
+        dirs[:] = sorted(
+            d for d in dirs
+            if d not in SKIP_DIRS and not d.startswith(".git")
+            and not (ignore and ignore.is_ignored((rel_dir / d).as_posix(), is_dir=True))
+        )
         depth = 0 if rel_dir == Path(".") else len(rel_dir.parts)
         if depth > 4:  # cap depth to keep the tree readable
             dirs[:] = []
@@ -137,7 +295,10 @@ def build_tree(repo: Path, max_entries: int) -> dict:
         for d in dirs:
             entries.append((rel_dir / d, "dir"))
         for f in sorted(files):
-            entries.append((rel_dir / f, "file"))
+            rel_f = rel_dir / f
+            if ignore and ignore.is_ignored(rel_f.as_posix(), is_dir=False):
+                continue
+            entries.append((rel_f, "file"))
 
     for rel, kind in entries:
         if count >= max_entries:
@@ -163,7 +324,7 @@ def read_text(path: Path, limit: int = 60_000) -> str:
         return ""
 
 
-def parse_dependencies(repo: Path, manifests_found: dict) -> dict:
+def parse_dependencies(repo: Path) -> dict:
     """Light-touch dependency extraction for the most common ecosystems."""
     deps = {}
 
@@ -258,7 +419,7 @@ def find_docs(repo: Path) -> list:
     return docs
 
 
-def analyze(repo: Path, max_tree_entries: int) -> dict:
+def analyze(repo: Path, max_tree_entries: int, respect_gitignore: bool = True) -> dict:
     lang_files = Counter()
     lang_loc = Counter()
     manifests_found = {}
@@ -267,7 +428,9 @@ def analyze(repo: Path, max_tree_entries: int) -> dict:
     total_files = 0
     total_loc = 0
 
-    for path, rel in walk_repo(repo):
+    ignore = IgnoreMatcher.from_repo(repo) if respect_gitignore else None
+
+    for path, rel in walk_repo(repo, ignore):
         total_files += 1
         name = path.name
         ext = path.suffix.lower()
@@ -293,16 +456,17 @@ def analyze(repo: Path, max_tree_entries: int) -> dict:
     return {
         "repo_path": str(repo),
         "repo_name": repo.name,
+        "gitignore_respected": bool(ignore and ignore.active),
         "totals": {"files_scanned": total_files, "code_loc": total_loc},
         "languages": languages,
         "primary_language": languages[0]["language"] if languages else None,
         "build_tools": manifests_found,
-        "dependencies": parse_dependencies(repo, manifests_found),
+        "dependencies": parse_dependencies(repo),
         "entry_points": sorted(set(entry_points)),
         "config_files": sorted(set(config_files))[:60],
         "docs": find_docs(repo),
         "git": git_signal(repo),
-        "directory_tree": build_tree(repo, max_tree_entries),
+        "directory_tree": build_tree(repo, max_tree_entries, ignore),
     }
 
 
@@ -311,6 +475,10 @@ def main():
     ap.add_argument("repo", help="path to the repository")
     ap.add_argument("--out", default=None, help="output JSON path (default: stdout)")
     ap.add_argument("--max-tree-entries", type=int, default=400)
+    ap.add_argument(
+        "--no-gitignore", dest="respect_gitignore", action="store_false",
+        help="analyze every file, ignoring .gitignore exclusions",
+    )
     args = ap.parse_args()
 
     repo = Path(args.repo).expanduser().resolve()
@@ -318,7 +486,7 @@ def main():
         print(f"error: {repo} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    result = analyze(repo, args.max_tree_entries)
+    result = analyze(repo, args.max_tree_entries, args.respect_gitignore)
     text = json.dumps(result, indent=2)
 
     if args.out:
@@ -331,6 +499,8 @@ def main():
               f"{result['totals']['code_loc']} LOC")
         print(f"  Languages: {langs or 'none detected'}")
         print(f"  Build tools: {', '.join(result['build_tools'].values()) or 'none detected'}")
+        if result["gitignore_respected"]:
+            print("  .gitignore-style exclusions applied")
     else:
         print(text)
 
